@@ -169,6 +169,7 @@ struct mmc_host {
 #define MMC_CAP_1_2V_DDR	(1 << 12)	/* can support */
 						/* DDR mode at 1.2V */
 #define MMC_CAP_POWER_OFF_CARD	(1 << 13)	/* Can power off after boot */
+#define MMC_CAP_FORCE_HS	(1 << 14)	/* Must enable highspeed mode */
 
 	mmc_pm_flag_t		pm_caps;	/* supported pm features */
 

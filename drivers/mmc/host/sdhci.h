@@ -70,6 +70,7 @@
 #define SDHCI_HOST_CONTROL 	0x28
 #define  SDHCI_CTRL_LED		0x01
 #define  SDHCI_CTRL_4BITBUS	0x02
+#define  SDHCI_CTRL_8BITBUS	0x20
 #define  SDHCI_CTRL_HISPD	0x04
 #define  SDHCI_CTRL_DMA_MASK	0x18
 #define   SDHCI_CTRL_SDMA	0x00
@@ -213,6 +214,7 @@ struct sdhci_ops {
 	void	(*set_clock)(struct sdhci_host *host, unsigned int clock);
 
 	int		(*enable_dma)(struct sdhci_host *host);
+	int		(*get_ro)(struct sdhci_host *host);
 	unsigned int	(*get_max_clock)(struct sdhci_host *host);
 	unsigned int	(*get_min_clock)(struct sdhci_host *host);
 	unsigned int	(*get_timeout_clock)(struct sdhci_host *host);
@@ -220,7 +222,6 @@ struct sdhci_ops {
 					       int width);
 	void (*platform_send_init_74_clocks)(struct sdhci_host *host,
 					     u8 power_mode);
-	unsigned int    (*get_ro)(struct sdhci_host *host);
 };
 
 #ifdef CONFIG_MMC_SDHCI_IO_ACCESSORS
@@ -310,6 +311,7 @@ static inline u8 sdhci_readb(struct sdhci_host *host, int reg)
 extern struct sdhci_host *sdhci_alloc_host(struct device *dev,
 	size_t priv_size);
 extern void sdhci_free_host(struct sdhci_host *host);
+extern void sdhci_card_detect_callback(struct sdhci_host *host);
 
 static inline void *sdhci_priv(struct sdhci_host *host)
 {
