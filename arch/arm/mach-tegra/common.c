@@ -19,12 +19,24 @@
 
 #include <linux/init.h>
 #include <linux/io.h>
+#include <linux/clk.h>
+#include <linux/delay.h>
 
 #include <asm/hardware/cache-l2x0.h>
 
 #include <mach/iomap.h>
+#include <mach/dma.h>
 
 #include "board.h"
+
+void __init tegra_init_cpu_clock(void)
+{
+	struct clk *pllx = clk_get_sys(NULL, "pll_x");
+	void __iomem *p = IO_ADDRESS(TEGRA_CLK_RESET_BASE);
+	writel(0x10000000, p+0x20);
+	clk_set_rate(pllx, 1000000000);
+	writel(0x10000008, p+0x20);
+}
 
 void __init tegra_init_cache(void)
 {
@@ -34,12 +46,19 @@ void __init tegra_init_cache(void)
 	writel(0x331, p + L2X0_TAG_LATENCY_CTRL);
 	writel(0x441, p + L2X0_DATA_LATENCY_CTRL);
 
-	l2x0_init(p, 0x6C080001, 0x8200c3fe);
+	l2x0_init(p, 0x0C780000, 0xffffffff);
+	/*Palm*/
+        /*l2x0_init(p, 0x00790000, 0xfe000fff);*/
 #endif
+
 }
 
 void __init tegra_common_init(void)
 {
 	tegra_init_clock();
+	tegra_init_cpu_clock();
 	tegra_init_cache();
+#ifdef CONFIG_TEGRA_SYSTEM_DMA
+	tegra_dma_init();
+#endif
 }
