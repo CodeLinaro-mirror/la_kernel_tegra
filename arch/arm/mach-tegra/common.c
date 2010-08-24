@@ -35,6 +35,8 @@
 
 void (*tegra_reset)(char mode, const char *cmd);
 
+void (*tegra_reset)(char mode, const char *cmd);
+
 static __initdata struct tegra_clk_init_table common_clk_init_table[] = {
 	/* name		parent		rate		enabled */
 	{ "clk_m",	NULL,		0,		true },
