@@ -307,16 +307,6 @@ static void dr_controller_run(struct fsl_udc *udc)
 #ifdef CONFIG_ARCH_TEGRA
 	unsigned long timeout;
 #define FSL_UDC_RUN_TIMEOUT 1000
-	/* If OTG transceiver is available, then it handles the VBUS detection */
-	if (!udc_controller->transceiver) {
-		/* Enable cable detection interrupt, without setting the
-		 * USB_SYS_VBUS_WAKEUP_INT bit. USB_SYS_VBUS_WAKEUP_INT is
-		 * clear on write */
-		temp = fsl_readl(&usb_sys_regs->vbus_wakeup);
-		temp |= (USB_SYS_VBUS_WAKEUP_INT_ENABLE | USB_SYS_VBUS_WAKEUP_ENABLE);
-		temp &= ~USB_SYS_VBUS_WAKEUP_INT_STATUS;
-		fsl_writel(temp, &usb_sys_regs->vbus_wakeup);
-	}
 #endif
 	/* Clear stopped bit */
 	udc->stopped = 0;
@@ -613,19 +603,13 @@ static int fsl_ep_disable(struct usb_ep *_ep)
 	}
 
 	/* disable ep on controller */
-#ifdef CONFIG_ARCH_TEGRA
-	/* Touch the registers if cable is connected and phy is on */
-	if (fsl_readl(&usb_sys_regs->vbus_wakeup) & USB_SYS_VBUS_STATUS)
-#endif
-	{
-		ep_num = ep_index(ep);
-		epctrl = fsl_readl(&dr_regs->endptctrl[ep_num]);
-		if (ep_is_in(ep))
-			epctrl &= ~EPCTRL_TX_ENABLE;
-		else
-			epctrl &= ~EPCTRL_RX_ENABLE;
-		fsl_writel(epctrl, &dr_regs->endptctrl[ep_num]);
-	}
+	ep_num = ep_index(ep);
+	epctrl = fsl_readl(&dr_regs->endptctrl[ep_num]);
+	if (ep_is_in(ep))
+		epctrl &= ~EPCTRL_TX_ENABLE;
+	else
+		epctrl &= ~EPCTRL_RX_ENABLE;
+	fsl_writel(epctrl, &dr_regs->endptctrl[ep_num]);
 
 	udc = (struct fsl_udc *)ep->udc;
 	spin_lock_irqsave(&udc->lock, flags);
@@ -1051,12 +1035,6 @@ static void fsl_ep_fifo_flush(struct usb_ep *_ep)
 	unsigned long timeout;
 #define FSL_UDC_FLUSH_TIMEOUT 1000
 
-#ifdef CONFIG_ARCH_TEGRA
-	/* Touch the registers if cable is connected and phy is on */
-	if (!(fsl_readl(&usb_sys_regs->vbus_wakeup) & USB_SYS_VBUS_STATUS))
-		return;
-#endif
-
 	if (!_ep) {
 		return;
 	} else {
@@ -1162,24 +1140,25 @@ static int fsl_vbus_session(struct usb_gadget *gadget, int is_active)
 			/* stop the controller and turn off the clocks */
 			dr_controller_stop(udc);
 			dr_controller_reset(udc);
+			spin_unlock_irqrestore(&udc->lock, flags);
 			fsl_udc_clk_suspend();
 			udc->vbus_active = 0;
 			udc->usb_state = USB_STATE_DEFAULT;
 		} else if (!udc->vbus_active && is_active) {
+			spin_unlock_irqrestore(&udc->lock, flags);
 			fsl_udc_clk_resume();
 			/* setup the controller in the device mode */
 			dr_controller_setup(udc);
 			/* setup EP0 for setup packet */
 			ep0_setup(udc);
-			/* start the controller */
-			dr_controller_run(udc);
 			/* initialize the USB and EP states */
 			udc->usb_state = USB_STATE_ATTACHED;
 			udc->ep0_state = WAIT_FOR_SETUP;
 			udc->ep0_dir = 0;
 			udc->vbus_active = 1;
+			/* start the controller */
+			dr_controller_run(udc);
 		}
-		spin_unlock_irqrestore(&udc->lock, flags);
 		return 0;
 	}
 
@@ -1820,9 +1799,6 @@ static irqreturn_t fsl_udc_irq(int irq, void *_udc)
 	u32 irq_src;
 	irqreturn_t status = IRQ_NONE;
 	unsigned long flags;
-#if defined(CONFIG_ARCH_TEGRA)
-	u32 temp;
-#endif
 
 	spin_lock_irqsave(&udc->lock, flags);
 
