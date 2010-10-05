@@ -51,36 +51,3 @@ void tegra_fiq_select(int irq, int on)
 {
 	tegra_legacy_select_fiq(irq, !!on);
 }
-
-extern unsigned char fiq_glue, fiq_glue_end;
-
-static void (*fiq_func)(void *data, void *regs, void *svc_sp);
-static void *fiq_data;
-static void *fiq_stack;
-
-void fiq_glue_setup(void *func, void *data, void *sp);
-void set_fiq_handler(void *start, unsigned int length);
-
-int tegra_fiq_set_handler(void (*func)(void *data, void *regs, void *svc_sp),
-		void *data)
-{
-	unsigned long flags;
-	int rc = -ENOMEM;
-
-	if (!fiq_stack)
-		fiq_stack = kmalloc(THREAD_SIZE, GFP_KERNEL);
-	if (!fiq_stack)
-		return rc;
-
-	local_irq_save(flags);
-	if (fiq_func == 0) {
-		fiq_func = func;
-		fiq_data = data;
-		fiq_glue_setup(func, data, fiq_stack + THREAD_START_SP);
-		set_fiq_handler(&fiq_glue, (&fiq_glue_end - &fiq_glue));
-		rc = 0;
-	}
-	local_irq_restore(flags);
-
-	return rc;
-}
