@@ -40,6 +40,7 @@
 #include <linux/io.h>
 #include <linux/ktime.h>
 #include <linux/sysfs.h>
+#include <linux/pm_qos_params.h>
 
 #include <linux/tegra_audio.h>
 
@@ -64,7 +65,7 @@ struct audio_stream {
 	struct kfifo fifo;
 	struct completion fifo_completion;
 
-	unsigned errors;
+	struct tegra_audio_error_counts errors;
 
 	int i2s_fifo_atn_level;
 
@@ -74,6 +75,8 @@ struct audio_stream {
 	spinlock_t dma_req_lock; /* guards dma_has_it */
 	int dma_has_it;
 	struct tegra_dma_req dma_req;
+
+	struct pm_qos_request_list *pm_qos;
 };
 
 struct i2s_pio_stats {
@@ -526,6 +529,8 @@ static int start_playback(struct audio_stream *aos)
 	pr_debug("%s: starting playback\n", __func__);
 	rc = sound_ops->start_playback(aos);
 	spin_unlock_irqrestore(&aos->dma_req_lock, flags);
+	if (!rc)
+		pm_qos_update_request(aos->pm_qos, 0);
 	return rc;
 }
 
@@ -541,6 +546,8 @@ static int start_recording_if_necessary(struct audio_stream *ais)
 		rc = sound_ops->start_recording(ais);
 	}
 	spin_unlock_irqrestore(&ais->dma_req_lock, flags);
+	if (!rc)
+		pm_qos_update_request(ais->pm_qos, 0);
 	return rc;
 }
 
@@ -551,8 +558,9 @@ static bool stop_playback_if_necessary(struct audio_stream *aos)
 	if (kfifo_is_empty(&aos->fifo)) {
 		sound_ops->stop_playback(aos);
 		if (aos->active)
-			aos->errors++;
+			aos->errors.full_empty++; /* underflow */
 		spin_unlock_irqrestore(&aos->dma_req_lock, flags);
+		pm_qos_update_request(aos->pm_qos, PM_QOS_DEFAULT_VALUE);
 		return true;
 	}
 	spin_unlock_irqrestore(&aos->dma_req_lock, flags);
@@ -566,7 +574,7 @@ static bool stop_recording_if_necessary_nosync(struct audio_stream *ais)
 
 	if (ads->recording_cancelled || kfifo_is_full(&ais->fifo)) {
 		if (kfifo_is_full(&ais->fifo))
-			ais->errors++;
+			ais->errors.full_empty++;  /* overflow */
 		sound_ops->stop_recording(ais);
 		return true;
 	}
@@ -581,6 +589,7 @@ static bool stop_recording(struct audio_stream *ais)
 	rc = wait_for_completion_interruptible(
 			&ais->stop_completion);
 	pr_debug("%s: done: %d\n", __func__, rc);
+	pm_qos_update_request(ais->pm_qos, PM_QOS_DEFAULT_VALUE);
 	return true;
 }
 
@@ -687,7 +696,7 @@ static void dma_tx_complete_callback(struct tegra_dma_req *req)
 	if (delta_us > max_delay_us) {
 		pr_debug("%s: too late by %lld us\n", __func__,
 			delta_us - max_delay_us);
-		aos->errors++;
+		aos->errors.late_dma++;
 	}
 
 	kfifo_skip(&aos->fifo, count);
@@ -1066,7 +1075,7 @@ static irqreturn_t i2s_interrupt(int irq, void *data)
 
 	if (status & I2S_I2S_FIFO_RX_ERR) {
 		ads->pio_stats.rx_fifo_errors++;
-		ads->in.errors++;
+		ads->in.errors.full_empty++;
 	}
 
 	if (status & I2S_FIFO_ERR)
@@ -1275,7 +1284,7 @@ static long tegra_audio_out_ioctl(struct file *file,
 				sizeof(aos->errors)))
 			rc = -EFAULT;
 		if (!rc)
-			aos->errors = 0;
+			memset(&aos->errors, 0, sizeof(aos->errors));
 		break;
 	case TEGRA_AUDIO_OUT_PRELOAD_FIFO: {
 		struct tegra_audio_out_preload preload;
@@ -1414,7 +1423,7 @@ static long tegra_audio_in_ioctl(struct file *file,
 				sizeof(ais->errors)))
 			rc = -EFAULT;
 		if (!rc)
-			ais->errors = 0;
+			memset(&ais->errors, 0, sizeof(ais->errors));
 		break;
 	default:
 		rc = -EINVAL;
@@ -1674,7 +1683,7 @@ static int tegra_audio_out_open(struct inode *inode, struct file *file)
 	mutex_lock(&ads->out.lock);
 	if (!ads->out.opened++) {
 		pr_info("%s: resetting fifo and error count\n", __func__);
-		ads->out.errors = 0;
+		memset(&ads->out.errors, 0, sizeof(ads->out.errors));
 		kfifo_reset(&ads->out.fifo);
 	}
 	mutex_unlock(&ads->out.lock);
@@ -1711,7 +1720,7 @@ static int tegra_audio_in_open(struct inode *inode, struct file *file)
 		 * input device.
 		 */
 		ads->recording_cancelled = false;
-		ads->in.errors = 0;
+		memset(&ads->in.errors, 0, sizeof(ads->in.errors));
 		kfifo_reset(&ads->in.fifo);
 	}
 	mutex_unlock(&ads->in.lock);
@@ -2158,6 +2167,24 @@ static int tegra_audio_probe(struct platform_device *pdev)
 			PCM_IN_BUFFER_PADDING);
 	if (rc < 0)
 		return rc;
+
+	state->in.pm_qos = pm_qos_add_request(PM_QOS_CPU_DMA_LATENCY,
+				PM_QOS_DEFAULT_VALUE);
+	if (!state->in.pm_qos) {
+		dev_err(&pdev->dev,
+			"%s: could not register pm_qos handle for input\n",
+			__func__);
+		return -EIO;
+	}
+
+	state->out.pm_qos = pm_qos_add_request(PM_QOS_CPU_DMA_LATENCY,
+				PM_QOS_DEFAULT_VALUE);
+	if (!state->out.pm_qos) {
+		dev_err(&pdev->dev,
+			"%s: could not register pm_qos handle for output\n",
+			__func__);
+		return -EIO;
+	}
 
 	if (request_irq(state->irq, i2s_interrupt,
 			IRQF_DISABLED, state->pdev->name, state) < 0) {

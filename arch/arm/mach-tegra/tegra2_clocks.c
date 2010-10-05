@@ -262,6 +262,18 @@ static struct clk_ops tegra_clk_m_ops = {
 	.disable	= tegra2_clk_m_disable,
 };
 
+void tegra2_periph_reset_assert(struct clk *c)
+{
+	BUG_ON(!c->ops->reset);
+	c->ops->reset(c, true);
+}
+
+void tegra2_periph_reset_deassert(struct clk *c)
+{
+	BUG_ON(!c->ops->reset);
+	c->ops->reset(c, false);
+}
+
 /* super clock functions */
 /* "super clocks" on tegra have two-stage muxes and a clock skipping
  * super divider.  We will ignore the clock skipping divider, since we
@@ -398,6 +410,32 @@ static struct clk_ops tegra_cpu_ops = {
 	.enable   = tegra2_cpu_clk_enable,
 	.disable  = tegra2_cpu_clk_disable,
 	.set_rate = tegra2_cpu_clk_set_rate,
+};
+
+/* virtual cop clock functions. Used to acquire the fake 'cop' clock to
+ * reset the COP block (i.e. AVP) */
+static void tegra2_cop_clk_init(struct clk *c)
+{
+	c->state = c->parent->state;
+}
+
+static int tegra2_cop_clk_enable(struct clk *c)
+{
+	return 0;
+}
+
+static void tegra2_cop_clk_reset(struct clk *c, bool assert)
+{
+	unsigned long reg = assert ? RST_DEVICES_SET : RST_DEVICES_CLR;
+
+	pr_debug("%s %s\n", __func__, assert ? "assert" : "deassert");
+	clk_writel(1 << 1, reg);
+}
+
+static struct clk_ops tegra_cop_ops = {
+	.init     = tegra2_cop_clk_init,
+	.enable   = tegra2_cop_clk_enable,
+	.reset    = tegra2_cop_clk_reset,
 };
 
 /* bus clock functions */
@@ -869,22 +907,16 @@ static void tegra2_periph_clk_disable(struct clk *c)
 		CLK_OUT_ENB_CLR + PERIPH_CLK_TO_ENB_SET_REG(c));
 }
 
-void tegra2_periph_reset_deassert(struct clk *c)
+static void tegra2_periph_clk_reset(struct clk *c, bool assert)
 {
-	pr_debug("%s on clock %s\n", __func__, c->name);
+	unsigned long base = assert ? RST_DEVICES_SET : RST_DEVICES_CLR;
+
+	pr_debug("%s %s on clock %s\n", __func__,
+		 assert ? "assert" : "deassert", c->name);
 	if (!(c->flags & PERIPH_NO_RESET))
 		clk_writel(PERIPH_CLK_TO_ENB_BIT(c),
-			RST_DEVICES_CLR + PERIPH_CLK_TO_ENB_SET_REG(c));
+			   base + PERIPH_CLK_TO_ENB_SET_REG(c));
 }
-
-void tegra2_periph_reset_assert(struct clk *c)
-{
-	pr_debug("%s on clock %s\n", __func__, c->name);
-	if (!(c->flags & PERIPH_NO_RESET))
-		clk_writel(PERIPH_CLK_TO_ENB_BIT(c),
-			RST_DEVICES_SET + PERIPH_CLK_TO_ENB_SET_REG(c));
-}
-
 
 static int tegra2_periph_clk_set_parent(struct clk *c, struct clk *p)
 {
@@ -976,6 +1008,7 @@ static struct clk_ops tegra_periph_clk_ops = {
 	.set_parent		= &tegra2_periph_clk_set_parent,
 	.set_rate		= &tegra2_periph_clk_set_rate,
 	.round_rate		= &tegra2_periph_clk_round_rate,
+	.reset			= &tegra2_periph_clk_reset,
 };
 
 /* Clock doubler ops */
@@ -1090,7 +1123,6 @@ static void tegra2_cdev_clk_init(struct clk *c)
 {
 	/* We could un-tristate the cdev1 or cdev2 pingroup here; this is
 	 * currently done in the pinmux code. */
-	pr_info("%s: %s\n", __func__, c->name);
 	c->state = ON;
 	if (!(clk_readl(CLK_OUT_ENB + PERIPH_CLK_TO_ENB_REG(c)) &
 			PERIPH_CLK_TO_ENB_BIT(c)))
@@ -1099,7 +1131,6 @@ static void tegra2_cdev_clk_init(struct clk *c)
 
 static int tegra2_cdev_clk_enable(struct clk *c)
 {
-	pr_info("%s: %s\n", __func__, c->name);
 	clk_writel(PERIPH_CLK_TO_ENB_BIT(c),
 		CLK_OUT_ENB_SET + PERIPH_CLK_TO_ENB_SET_REG(c));
 	return 0;
@@ -1107,7 +1138,6 @@ static int tegra2_cdev_clk_enable(struct clk *c)
 
 static void tegra2_cdev_clk_disable(struct clk *c)
 {
-	pr_info("%s: %s\n", __func__, c->name);
 	clk_writel(PERIPH_CLK_TO_ENB_BIT(c),
 		CLK_OUT_ENB_CLR + PERIPH_CLK_TO_ENB_SET_REG(c));
 }
@@ -1602,7 +1632,7 @@ static struct clk tegra_clk_sclk = {
 	.inputs	= mux_sclk,
 	.reg	= 0x28,
 	.ops	= &tegra_super_ops,
-	.max_rate = 600000000,
+	.max_rate = 240000000,
 };
 
 static struct clk tegra_clk_virtual_cpu = {
@@ -1613,6 +1643,13 @@ static struct clk tegra_clk_virtual_cpu = {
 	.ops       = &tegra_cpu_ops,
 	.max_rate  = 1000000000,
 	.dvfs      = &tegra_dvfs_virtual_cpu_dvfs,
+};
+
+static struct clk tegra_clk_cop = {
+	.name      = "cop",
+	.parent    = &tegra_clk_sclk,
+	.ops       = &tegra_cop_ops,
+	.max_rate  = 240000000,
 };
 
 static struct clk tegra_clk_hclk = {
@@ -1632,7 +1669,7 @@ static struct clk tegra_clk_pclk = {
 	.reg		= 0x30,
 	.reg_shift	= 0,
 	.ops		= &tegra_bus_ops,
-	.max_rate       = 108000000,
+	.max_rate       = 120000000,
 };
 
 static struct clk tegra_clk_blink = {
@@ -1869,6 +1906,7 @@ struct clk_lookup tegra_clk_lookups[] = {
 	CLK(NULL,	"clk_dev2",	&tegra_dev2_clk),
 	CLK(NULL,	"cpu",		&tegra_clk_virtual_cpu),
 	CLK(NULL,	"blink",	&tegra_clk_blink),
+	CLK("tegra-avp", "cop",		&tegra_clk_cop),
 };
 
 void __init tegra2_init_clocks(void)
