@@ -1909,7 +1909,8 @@ int sdhci_add_host(struct sdhci_host *host)
 	 */
 	if (host->quirks & SDHCI_QUIRK_8_BIT_DATA)
 		mmc->caps |= MMC_CAP_8_BIT_DATA;
-	else if (!(host->quirks & SDHCI_QUIRK_FORCE_1_BIT_DATA))
+
+	if (!(host->quirks & SDHCI_QUIRK_FORCE_1_BIT_DATA))
 		mmc->caps |= MMC_CAP_4_BIT_DATA;
 
 	if (!(host->quirks & SDHCI_QUIRK_NO_SDIO_IRQ))
