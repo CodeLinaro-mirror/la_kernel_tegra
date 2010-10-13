@@ -65,7 +65,7 @@ void tegra_init_cache(void)
 	writel(0x331, p + L2X0_TAG_LATENCY_CTRL);
 	writel(0x441, p + L2X0_DATA_LATENCY_CTRL);
 
-	l2x0_init(p, 0x6C080001, 0x8200c3fe);
+	l2x0_init(p, 0x6C480001, 0x8200c3fe);
 #endif
 
 }
