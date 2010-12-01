@@ -33,6 +33,7 @@ void __init tegra_protected_aperture_init(unsigned long aperture);
 void __init tegra_move_framebuffer(unsigned long to, unsigned long from,
 	unsigned long size);
 int __init tegra_pcie_init(bool init_port0, bool init_port1);
+int tegra_dvfs_rail_disable_by_name(const char *reg_id);
 
 extern unsigned long tegra_bootloader_fb_start;
 extern unsigned long tegra_bootloader_fb_size;
